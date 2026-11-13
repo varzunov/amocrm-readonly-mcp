@@ -1,0 +1,39 @@
+FROM node:24-bookworm-slim AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY tsconfig.json ./
+COPY src ./src
+RUN npm run build
+
+FROM debian:bookworm-slim AS tunnel
+ARG TUNNEL_CLIENT_VERSION=v0.0.20
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl unzip \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /tmp/tunnel
+RUN set -eux; \
+    asset="tunnel-client-${TUNNEL_CLIENT_VERSION}-linux-amd64.zip"; \
+    base="https://github.com/openai/tunnel-client/releases/download/${TUNNEL_CLIENT_VERSION}"; \
+    curl -fsSLO "${base}/${asset}"; \
+    curl -fsSLO "${base}/SHA256SUMS.txt"; \
+    grep "  ${asset}$" SHA256SUMS.txt | sha256sum --check --strict -; \
+    unzip -q "${asset}"; \
+    find . -type f -name tunnel-client -exec install -m 0755 {} /usr/local/bin/tunnel-client \;
+
+FROM node:24-bookworm-slim AS runtime
+ENV NODE_ENV=production \
+    HOME=/tmp/tunnel-home \
+    HEALTH_PORT=8000
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=build /app/dist ./dist
+COPY --from=tunnel /usr/local/bin/tunnel-client /usr/local/bin/tunnel-client
+COPY koyeb-entrypoint.sh /usr/local/bin/koyeb-entrypoint
+RUN chmod 0755 /usr/local/bin/koyeb-entrypoint \
+    && mkdir -p /tmp/tunnel-home \
+    && chown -R node:node /app /tmp/tunnel-home
+USER node
+EXPOSE 8000
+ENTRYPOINT ["/usr/local/bin/koyeb-entrypoint"]
