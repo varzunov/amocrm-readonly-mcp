@@ -46,9 +46,29 @@ fi
 install -m 0755 "${binary}" /usr/local/bin/tunnel-client
 /usr/local/bin/tunnel-client --version
 
-printf '\nВставьте Runtime API key OpenAI (ввод скрыт): ' >/dev/tty
-IFS= read -r -s CONTROL_PLANE_API_KEY </dev/tty
-printf '\n' >/dev/tty
+sanitize_key() {
+  local value="$1"
+  value="${value//$'\033[200~'/}"
+  value="${value//$'\033[201~'/}"
+  value="${value//$'\r'/}"
+  printf '%s' "${value}"
+}
+
+CONTROL_PLANE_API_KEY=""
+if [[ -f /etc/amocrm-tunnel.env ]]; then
+  stored_key="$(sed -n 's/^CONTROL_PLANE_API_KEY=//p' /etc/amocrm-tunnel.env | head -n 1)"
+  CONTROL_PLANE_API_KEY="$(sanitize_key "${stored_key}")"
+fi
+
+if [[ ! "${CONTROL_PLANE_API_KEY}" =~ ^sk- ]]; then
+  printf '\nВставьте Runtime API key OpenAI (ввод скрыт): ' >/dev/tty
+  IFS= read -r -s CONTROL_PLANE_API_KEY </dev/tty
+  printf '\n' >/dev/tty
+  CONTROL_PLANE_API_KEY="$(sanitize_key "${CONTROL_PLANE_API_KEY}")"
+else
+  printf '\nИспользую ранее сохранённый Runtime API key после безопасной очистки.\n'
+fi
+
 if [[ ${#CONTROL_PLANE_API_KEY} -lt 20 ]]; then
   printf 'Ключ выглядит слишком коротким. Ничего не запущено.\n' >&2
   exit 1
@@ -59,11 +79,13 @@ printf 'CONTROL_PLANE_API_KEY=%s\n' "${CONTROL_PLANE_API_KEY}" >/etc/amocrm-tunn
 chmod 600 /etc/amocrm-tunnel.env
 export CONTROL_PLANE_API_KEY
 
-/usr/local/bin/tunnel-client init \
-  --sample sample_mcp_remote_no_auth \
-  --profile "${PROFILE_NAME}" \
-  --tunnel-id "${TUNNEL_ID}" \
-  --mcp-server-url "${MCP_SERVER_URL}"
+if [[ ! -f "/root/.config/tunnel-client/${PROFILE_NAME}.yaml" ]]; then
+  /usr/local/bin/tunnel-client init \
+    --sample sample_mcp_remote_no_auth \
+    --profile "${PROFILE_NAME}" \
+    --tunnel-id "${TUNNEL_ID}" \
+    --mcp-server-url "${MCP_SERVER_URL}"
+fi
 
 /usr/local/bin/tunnel-client doctor --profile "${PROFILE_NAME}" --explain
 
