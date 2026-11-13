@@ -1,0 +1,22 @@
+name: Verify Koyeb image
+
+on:
+  push:
+    paths:
+      - "Dockerfile.koyeb"
+      - "koyeb-entrypoint.sh"
+      - "src/**"
+      - "package*.json"
+      - "tsconfig.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build container
+        run: docker build -f Dockerfile.koyeb -t amocrm-koyeb:test .
