@@ -51,6 +51,9 @@ sanitize_key() {
   value="${value//$'\033[200~'/}"
   value="${value//$'\033[201~'/}"
   value="${value//$'\r'/}"
+  if [[ "${value}" =~ (sk-[A-Za-z0-9_-]{20,}) ]]; then
+    value="${BASH_REMATCH[1]}"
+  fi
   printf '%s' "${value}"
 }
 
