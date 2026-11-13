@@ -18,6 +18,16 @@
 - собственная интеграция amoCRM;
 - Secure MCP Tunnel, связанный с тем же аккаунтом/рабочим пространством ChatGPT.
 
+## Быстрая установка на Ubuntu/Debian
+
+Запустите в терминале VPS одну команду:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/varzunov/amocrm-readonly-mcp/main/install.sh)
+```
+
+Установщик при необходимости поставит Git, Docker и Docker Compose, скачает проект, запросит долгосрочный токен скрытым вводом и проверит запуск. Токен остаётся только в закрытом файле `.env` на VPS.
+
 ## 1. Настройка окружения
 
 ```bash
