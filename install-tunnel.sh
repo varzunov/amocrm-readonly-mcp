@@ -60,6 +60,7 @@ chmod 600 /etc/amocrm-tunnel.env
 export CONTROL_PLANE_API_KEY
 
 /usr/local/bin/tunnel-client init \
+  --sample sample_mcp_remote_no_auth \
   --profile "${PROFILE_NAME}" \
   --tunnel-id "${TUNNEL_ID}" \
   --mcp-server-url "${MCP_SERVER_URL}"
