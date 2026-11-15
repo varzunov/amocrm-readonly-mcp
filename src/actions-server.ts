@@ -18,7 +18,7 @@ type Task = { id: number; responsible_user_id?: number; entity_id?: number; enti
 const config = loadConfig();
 const amo = new AmoClient(config);
 const apiKey = process.env.ACTIONS_API_KEY?.trim();
-if (!apiKey || apiKey.length < 32) throw new Error("ACTIONS_API_KEY must contain at least 32 characters");
+if (!apiKey || apiKey.length < 20) throw new Error("ACTIONS_API_KEY must contain at least 20 characters");
 
 function secureEqual(left: string, right: string) {
   const a = Buffer.from(left);
