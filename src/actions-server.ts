@@ -11,7 +11,16 @@ type User = { id: number; name: string; rights?: { is_active?: boolean } };
 type Lead = {
   id: number; name: string; price?: number; pipeline_id?: number; status_id?: number;
   responsible_user_id?: number; created_at?: number; updated_at?: number; closed_at?: number | null;
-  custom_fields_values?: unknown[] | null;
+  custom_fields_values?: CustomFieldValue[] | null;
+};
+type CustomFieldValue = {
+  field_id: number; field_name?: string; field_code?: string | null; field_type?: string;
+  values?: Array<{ value?: unknown; enum_id?: number | null; enum_code?: string | null }>;
+};
+type CustomFieldDefinition = {
+  id: number; name: string; code?: string | null; type?: string; is_api_only?: boolean;
+  enums?: Array<{ id: number; value: string; sort?: number }>;
+  _embedded?: { enums?: Array<{ id: number; value: string; sort?: number }> };
 };
 type Task = { id: number; responsible_user_id?: number; entity_id?: number; entity_type?: string; is_completed?: boolean; complete_till?: number; text?: string; task_type_id?: number };
 
@@ -86,6 +95,38 @@ async function collect<T>(pathName: string, key: string, params: URLSearchParams
     page += 1;
   }
   return items.slice(0, maxItems);
+}
+
+function confirmation(reason: string, estimatedItems: number) {
+  return {
+    confirmation_required: true,
+    estimated_max_items: estimatedItems,
+    reason,
+    prompt: `Запрос может потребовать обработать до ${estimatedItems.toLocaleString("ru-RU")} сделок. Брать его в работу?`,
+  };
+}
+
+function fieldValues(field: CustomFieldValue | undefined) {
+  return (field?.values || []).map(item => item.value).filter(value => value !== undefined && value !== null && value !== "");
+}
+
+async function leadFieldDefinitions() {
+  return collect<CustomFieldDefinition>("/api/v4/leads/custom_fields", "custom_fields", new URLSearchParams(), 1000);
+}
+
+function resolveField(fields: CustomFieldDefinition[], reference: unknown) {
+  const needle = String(reference ?? "").trim().toLocaleLowerCase("ru-RU");
+  return fields.find(field => String(field.id) === needle || field.name.toLocaleLowerCase("ru-RU") === needle || field.code?.toLocaleLowerCase("ru-RU") === needle);
+}
+
+function dateBucket(timestamp: number | null | undefined, bucket: string) {
+  if (!timestamp) return "(дата не заполнена)";
+  const date = new Date(timestamp * 1000);
+  const year = date.getUTCFullYear();
+  if (bucket === "year") return String(year);
+  if (bucket === "month") return `${year}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+  if (bucket === "quarter") return `${year} Q${Math.floor(date.getUTCMonth() / 3) + 1}`;
+  return "Все даты";
 }
 
 const asyncRoute = (handler: (req: Request, res: Response) => Promise<void>) =>
@@ -236,12 +277,22 @@ const crmTools = [
   { type: "function", name: "get_account", description: "Проверить подключённый аккаунт amoCRM.", strict: false, parameters: { type: "object", properties: {}, additionalProperties: false } },
   { type: "function", name: "list_pipelines", description: "Получить воронки и этапы, чтобы сопоставить ID с названиями.", strict: false, parameters: { type: "object", properties: {}, additionalProperties: false } },
   { type: "function", name: "list_users", description: "Получить активных менеджеров без email и телефонов.", strict: false, parameters: { type: "object", properties: { includeInactive: { type: "boolean" } }, additionalProperties: false } },
-  { type: "function", name: "list_leads", description: "Получить ограниченную выборку сделок без телефонов и email контактов.", strict: false, parameters: { type: "object", properties: {
+  { type: "function", name: "list_lead_fields", description: "Получить компактный каталог всех стандартных и пользовательских полей сделок amoCRM. Используй, когда пользователь называет поле, которого нет в обычной выборке.", strict: false, parameters: { type: "object", properties: {}, additionalProperties: false } },
+  { type: "function", name: "list_leads", description: "Получить ограниченную выборку сделок. Пользовательские поля возвращаются только по явному списку customFields, чтобы экономить токены.", strict: false, parameters: { type: "object", properties: {
     createdFrom: { type: "string", description: "ISO дата/время" }, createdTo: { type: "string", description: "ISO дата/время" },
     updatedFrom: { type: "string", description: "ISO дата/время" }, updatedTo: { type: "string", description: "ISO дата/время" },
     pipelineId: { type: "integer" }, statusId: { type: "integer" }, responsibleUserId: { type: "integer" },
-    limit: { type: "integer", minimum: 1, maximum: 500 },
+    customFields: { type: "array", items: { type: "string" }, maxItems: 20, description: "Названия или ID нужных пользовательских полей" },
+    limit: { type: "integer", minimum: 1, maximum: 500 }, confirmLargeRequest: { type: "boolean" },
   }, additionalProperties: false } },
+  { type: "function", name: "aggregate_leads", description: "Предпочтительный экономный инструмент для сводок: группирует сделки на сервере по любому полю и периоду, возвращая только компактный итог.", strict: false, parameters: { type: "object", properties: {
+    groupBy: { type: "string", description: "Поле: pipeline_id, status_id, responsible_user_id, либо название/ID пользовательского поля" },
+    timeField: { type: "string", enum: ["created_at", "updated_at", "closed_at"] },
+    timeBucket: { type: "string", enum: ["none", "month", "quarter", "year"] },
+    createdFrom: { type: "string" }, createdTo: { type: "string" }, updatedFrom: { type: "string" }, updatedTo: { type: "string" },
+    pipelineId: { type: "integer" }, statusId: { type: "integer" }, responsibleUserId: { type: "integer" },
+    maxLeads: { type: "integer", minimum: 1, maximum: 10000 }, confirmLargeRequest: { type: "boolean" },
+  }, required: ["groupBy"], additionalProperties: false } },
   { type: "function", name: "get_lead", description: "Получить карточку одной сделки по ID и связанные сущности.", strict: false, parameters: { type: "object", properties: { leadId: { type: "integer" } }, required: ["leadId"], additionalProperties: false } },
   { type: "function", name: "crm_overview", description: "Основной инструмент: агрегированный обзор воронки, открытых, выигранных, проигранных и зависших сделок.", strict: false, parameters: { type: "object", properties: {
     createdFrom: { type: "string", description: "ISO дата/время" }, createdTo: { type: "string", description: "ISO дата/время" },
@@ -268,8 +319,16 @@ async function executeCrmTool(name: string, args: Record<string, unknown>) {
     const includeInactive = Boolean(args.includeInactive);
     return users.filter(user => includeInactive || user.rights?.is_active !== false).map(user => ({ id: user.id, name: user.name, active: user.rights?.is_active ?? true }));
   }
+  if (name === "list_lead_fields") {
+    const fields = await leadFieldDefinitions();
+    return {
+      standard_fields: ["id", "name", "price", "pipeline_id", "status_id", "responsible_user_id", "created_at", "updated_at", "closed_at"],
+      custom_fields: fields.map(field => ({ id: field.id, name: field.name, type: field.type, code: field.code || undefined, enums: (field.enums || field._embedded?.enums)?.map(item => item.value) })),
+    };
+  }
   if (name === "list_leads") {
     const limit = positiveInt(args.limit, 100, 500)!;
+    if (limit > 200 && !optionalBoolean(args.confirmLargeRequest)) return confirmation("Полная выборка карточек расходует много токенов; для сводки лучше использовать aggregate_leads.", limit);
     const filters = {
       createdFrom: typeof args.createdFrom === "string" ? args.createdFrom : undefined,
       createdTo: typeof args.createdTo === "string" ? args.createdTo : undefined,
@@ -277,8 +336,60 @@ async function executeCrmTool(name: string, args: Record<string, unknown>) {
       updatedTo: typeof args.updatedTo === "string" ? args.updatedTo : undefined,
       pipelineId: positiveInt(args.pipelineId), statusId: positiveInt(args.statusId), responsibleUserId: positiveInt(args.responsibleUserId),
     };
+    const requested = Array.isArray(args.customFields) ? args.customFields.slice(0, 20) : [];
+    const definitions = requested.length ? await leadFieldDefinitions() : [];
+    const selected = requested.map(reference => resolveField(definitions, reference)).filter((field): field is CustomFieldDefinition => Boolean(field));
     const leads = await collect<Lead>("/api/v4/leads", "leads", leadFilters(filters), limit);
-    return leads.map(lead => ({ id: lead.id, name: lead.name, price: lead.price || 0, pipeline_id: lead.pipeline_id, status_id: lead.status_id, responsible_user_id: lead.responsible_user_id, created_at: iso(lead.created_at), updated_at: iso(lead.updated_at), closed_at: iso(lead.closed_at) }));
+    return leads.map(lead => {
+      const fields = Object.fromEntries(selected.map(definition => {
+        const value = fieldValues(lead.custom_fields_values?.find(field => field.field_id === definition.id));
+        return [definition.name, value.length <= 1 ? (value[0] ?? null) : value];
+      }));
+      return { id: lead.id, name: lead.name, price: lead.price || 0, pipeline_id: lead.pipeline_id, status_id: lead.status_id, responsible_user_id: lead.responsible_user_id, created_at: iso(lead.created_at), updated_at: iso(lead.updated_at), closed_at: iso(lead.closed_at), ...(selected.length ? { fields } : {}) };
+    });
+  }
+  if (name === "aggregate_leads") {
+    const filters = {
+      createdFrom: typeof args.createdFrom === "string" ? args.createdFrom : undefined,
+      createdTo: typeof args.createdTo === "string" ? args.createdTo : undefined,
+      updatedFrom: typeof args.updatedFrom === "string" ? args.updatedFrom : undefined,
+      updatedTo: typeof args.updatedTo === "string" ? args.updatedTo : undefined,
+      pipelineId: positiveInt(args.pipelineId), statusId: positiveInt(args.statusId), responsibleUserId: positiveInt(args.responsibleUserId),
+    };
+    const maxLeads = positiveInt(args.maxLeads, 5000, 10000)!;
+    const confirmed = optionalBoolean(args.confirmLargeRequest);
+    const previewLimit = !confirmed && maxLeads > 1000 ? 1001 : maxLeads;
+    let leads = await collect<Lead>("/api/v4/leads", "leads", leadFilters(filters), previewLimit);
+    if (!confirmed && leads.length > 1000) return confirmation("Сводка затрагивает более 1 000 сделок и может выполняться дольше обычного.", maxLeads);
+    if (confirmed && previewLimit !== maxLeads) leads = await collect<Lead>("/api/v4/leads", "leads", leadFilters(filters), maxLeads);
+
+    const groupBy = String(args.groupBy || "").trim();
+    const standard = new Set(["pipeline_id", "status_id", "responsible_user_id", "created_at", "updated_at", "closed_at", "price"]);
+    const definitions = standard.has(groupBy) ? [] : await leadFieldDefinitions();
+    const customField = definitions.length ? resolveField(definitions, groupBy) : undefined;
+    if (!standard.has(groupBy) && !customField) throw new Error(`Поле «${groupBy}» не найдено. Сначала вызови list_lead_fields.`);
+    const timeField = ["created_at", "updated_at", "closed_at"].includes(String(args.timeField)) ? String(args.timeField) as "created_at" | "updated_at" | "closed_at" : "created_at";
+    const timeBucket = ["none", "month", "quarter", "year"].includes(String(args.timeBucket)) ? String(args.timeBucket) : "none";
+    const rows = new Map<string, { period: string; group: string; deals: number; value: number; open: number; won: number; lost: number }>();
+    for (const lead of leads) {
+      let groups: unknown[];
+      if (customField) groups = fieldValues(lead.custom_fields_values?.find(field => field.field_id === customField.id));
+      else groups = [(lead as unknown as Record<string, unknown>)[groupBy]];
+      if (!groups.length || groups.every(value => value === undefined || value === null || value === "")) groups = ["(не заполнено)"];
+      const period = dateBucket(lead[timeField], timeBucket);
+      for (const rawGroup of [...new Set(groups.map(value => String(value)))]) {
+        const key = `${period}\u0000${rawGroup}`;
+        const row = rows.get(key) || { period, group: rawGroup, deals: 0, value: 0, open: 0, won: 0, lost: 0 };
+        row.deals += 1; row.value += lead.price || 0;
+        if (lead.status_id === 142) row.won += 1; else if (lead.status_id === 143) row.lost += 1; else row.open += 1;
+        rows.set(key, row);
+      }
+    }
+    return {
+      field: customField ? { id: customField.id, name: customField.name, type: customField.type } : { name: groupBy, type: "standard" },
+      time_field: timeField, time_bucket: timeBucket, processed_leads: leads.length, truncated: leads.length >= maxLeads,
+      rows: [...rows.values()].sort((a, b) => a.period.localeCompare(b.period) || b.deals - a.deals),
+    };
   }
   if (name === "get_lead") {
     const leadId = positiveInt(args.leadId)!;
@@ -345,7 +456,7 @@ app.post("/api/chat", asyncRoute(async (req, res) => {
         model: openaiModel,
         store: false,
         include: ["reasoning.encrypted_content"],
-        instructions: `Ты — старший аналитик продаж проекта «Можем». Отвечай по-русски, конкретно и управленчески. Используй только предоставленные инструменты amoCRM и никогда не выдумывай данные. Для любого анализа сначала вызови crm_overview с указанным пользователем периодом; если период не указан — используй последние 30 дней и явно скажи об этом. Для названий этапов используй list_pipelines, для имён ответственных — list_users. Не показывай голые ID, если можешь получить название. Для зависших сделок используй stale_leads из crm_overview; зависшая сделка — открытая сделка без обновления дольше staleDays. Не называй сумму всех статусов прогнозом выручки. При сравнении менеджеров учитывай разную нагрузку и качество входящих лидов, не делай категоричных выводов только по числу побед. Если данных для вывода недостаточно — прямо скажи, каких полей не хватает. Оформляй ответ в Markdown как аккуратный отчёт: короткие заголовки второго уровня без нумерации, обычные абзацы, маркированные и нумерованные списки. Для сравнения трёх и более сделок, этапов или менеджеров используй компактную Markdown-таблицу. Не используй сырой HTML. Структура: краткий вывод; ключевые цифры; проблемы и отклонения; конкретные сделки или ответственные, если применимо; 3–7 приоритетных действий; ограничения данных. Валюта аккаунта RUB, отображай суммы в ₽. Доступ строго read-only: не обещай изменять данные. Сегодня: ${new Date().toISOString().slice(0, 10)}.`,
+        instructions: `Ты — старший аналитик продаж проекта «Можем». Отвечай по-русски, конкретно и управленчески. Используй только предоставленные инструменты amoCRM и никогда не выдумывай данные. Выбирай самый экономный инструмент: crm_overview — для общего обзора и зависших сделок; aggregate_leads — для группировок по периодам, менеджерам и любым пользовательским полям; list_leads — только когда нужны конкретные карточки. Не вызывай crm_overview автоматически, если вопрос можно полностью решить одним другим инструментом. Если пользователь называет неизвестное поле, один раз вызови list_lead_fields, затем передавай в list_leads только явно нужные customFields. Никогда не загружай все поля всех карточек без необходимости. Если инструмент вернул confirmation_required=true, не продолжай расчёт: покажи пользователю оценку объёма и задай ровно вопрос из prompt. После явного подтверждения повтори тот же вызов с confirmLargeRequest=true. Если период не указан — используй последние 30 дней и явно скажи об этом; если пользователь указал всё время, не добавляй собственное ограничение. Для названий этапов используй list_pipelines, для имён ответственных — list_users. Не показывай голые ID, если можешь получить название. Зависшая сделка — открытая сделка без обновления дольше staleDays. Не называй сумму всех статусов прогнозом выручки. При сравнении менеджеров учитывай разную нагрузку и качество входящих лидов. Если данных недостаточно — прямо скажи, каких полей не хватает. Оформляй ответ в Markdown как аккуратный отчёт: короткие заголовки второго уровня без нумерации, обычные абзацы, списки и компактные Markdown-таблицы для сравнений. Не используй сырой HTML. Структура по ситуации: краткий вывод; ключевые цифры; проблемы; конкретика; приоритетные действия; ограничения. Валюта аккаунта RUB, отображай суммы в ₽. Доступ строго read-only. Сегодня: ${new Date().toISOString().slice(0, 10)}.`,
         input,
         tools: crmTools,
         max_output_tokens: 3000,
