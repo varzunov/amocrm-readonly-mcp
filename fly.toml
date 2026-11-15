@@ -6,8 +6,8 @@ primary_region = "ams"
 
 [env]
   AMO_BASE_URL = "https://mozhemevent.amocrm.ru"
-  TUNNEL_ID = "tunnel_6af6e9f4e1e88191b9e234a1e28cb526"
-  HEALTH_PORT = "8000"
+  HOST = "0.0.0.0"
+  PORT = "8000"
 
 [http_service]
   internal_port = 8000
